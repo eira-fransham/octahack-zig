@@ -185,6 +185,13 @@ const OctahackComponent = ComponentUnion(union(enum) {
         Audio: Audio,
         Midi: Midi,
     };
+
+    pub const Inputs = union(enum) {
+        Something: SomethingComponent.Inputs,
+    };
+    pub const Properties = union(enum) {
+        Something: SomethingComponent.Properties,
+    };
 });
 
 fn make_null(comptime T: type) T {
@@ -192,35 +199,45 @@ fn make_null(comptime T: type) T {
     assert(@typeId(T.Child) == TypeId.Optional);
 
     var out: T = undefined;
-
-    inline for (out) |*val| {
-        *val = null;
+    comptime {
+        var i = 0;
+        while (i < T.len) : (i += 1) {
+            out[i] = null;
+        }
     }
 
     return out;
 }
 
-fn Track(comptime num_components: comptime_int, comptime Component: type) type {
-    return struct {
-        const ComponentSpecifier = union(enum) {
+fn Track(comptime num_components: comptime_int, comptime InnerComponent: type) type {
+    const Out = struct {
+        const Self = @This();
+        const Wire = union(enum) {
             Component: struct {
                 tag: usize,
                 index: usize,
+                output_id: usize,
             },
-            Self,
+            Self: usize,
         };
-        const Wire = struct {
-            component: ComponentSpecifier,
-            output_id: usize,
-        };
-        const WireArray = [Component.MAX_INPUT_COUNT]?Wire;
+        const WireArray = [InnerComponent.MAX_INPUT_COUNT]?Wire;
         const TaggedComponent = struct {
             tag: usize,
-            value: Component,
+            value: InnerComponent,
             wiring: WireArray,
         };
 
+        pub const Inputs = struct {
+            audio: Audio,
+            midi: Midi,
+        };
+        pub const Properties = struct {};
+        const OutputWires = struct {
+            audio: ?Wire,
+            midi: ?Wire,
+        };
         components: [num_components]?TaggedComponent,
+        outputs: OutputWires,
         current_tag: usize,
 
         fn next_id(this: *Self) usize {
@@ -229,7 +246,36 @@ fn Track(comptime num_components: comptime_int, comptime Component: type) type {
             return out;
         }
 
-        pub fn new_component(this: *Self, index: usize, tag: Component.ComponentKind) void {
+        pub fn new() Self {
+            return @This(){
+                .components = make_null([num_components]?TaggedComponent),
+                .outputs = OutputWires{ .audio = null, .midi = null },
+                .current_tag = 0,
+            };
+        }
+
+        fn get_output(this: *Self, wire: Wire, inputs: Inputs, properties: Properties) ?InnerComponent.Value {
+            @panic("unimplemented");
+        }
+
+        fn get_audio(this: *Self, inputs: Inputs, properties: Properties) ?Audio {
+            if (this.outputs.audio) |audio| {
+                const maybe_out_val = this.get_output(audio, inputs, properties);
+                if (maybe_out_val) |out_val| {
+                    return helpers.try_from_union(Audio, out_val);
+                } else {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        fn get_midi(self: *Self, inputs: Inputs, properties: Properties) ?Midi {
+            @panic("unimplemented");
+        }
+
+        pub fn new_component(this: *Self, index: usize, tag: InnerComponent.ComponentKind) void {
             const tag = this.next_id();
             components[index] = TaggedComponent{
                 .tag = tag,
@@ -242,14 +288,16 @@ fn Track(comptime num_components: comptime_int, comptime Component: type) type {
                 //         (f.e. by output name?)
                 // TODO: Wiring for properties (for LFOs etc).
                 .wiring = make_null(WireArray),
-                .value = Component.new(tag),
+                .value = InnerComponent.new(tag),
             };
         }
     };
+
+    return Component(Out).output("audio", Out.get_audio).output("midi", Out.get_midi);
 }
 
 test "Component" {
-    const expected = [2]OutputInfo{ OutputInfo{ .name = "audio", .output_type = Audio }, OutputInfo{ .name = "midi", .output_type = Midi } };
+    const expected = [2]OutputInfo{ OutputInfo{ .name = "midi", .output_type = Midi }, OutputInfo{ .name = "audio", .output_type = Audio } };
     if (does_not_match(SomethingComponent.info(), expected)) |fail| {
         @compileError(fail.msg());
     }
@@ -270,4 +318,8 @@ test "ComponentUnion" {
         const anything = my_comp.inputs();
         const anything_else = my_comp.outputs();
     }
+}
+
+test "Track" {
+    const MyTrack = Track(8, OctahackComponent);
 }
