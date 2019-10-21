@@ -139,6 +139,8 @@ pub fn ComponentUnion(comptime T: type) type {
         pub const MAX_INPUT_COUNT = get_max_input_count();
 
         pub const Value = T.Value;
+        pub const Properties = T.Properties;
+        pub const Inputs = T.Inputs;
 
         pub const ValueKind = @TagType(Value);
         pub const ValueInfo = struct {
@@ -160,7 +162,7 @@ pub fn ComponentUnion(comptime T: type) type {
             var out: [@typeInfo(Variant).Struct.fields.len]ValueInfo = undefined;
 
             inline for (@typeInfo(Variant).Struct.fields) |field, i| {
-                out[i] = ValueInfo{ .name = field.name, .kind = union_variant_for(Value, field.field_type) };
+                out[i] = ValueInfo{ .name = field.name, .kind = union_variant_for(Value, field.field_type).tag };
             }
 
             return out;
@@ -180,19 +182,21 @@ pub fn ComponentUnion(comptime T: type) type {
         }
 
         pub fn inputs(this: *const Self) []const ValueInfo {
-            inline for (@typeInfo(T).Union.fields) |field| {
-                if (@enumToInt(this.value) == field.enum_field.?.value) {
-                    return to_input_list(field.field_type.Inputs)[0..];
+            comptime {
+                inline for (@typeInfo(T).Union.fields) |field| {
+                    if (@enumToInt(this.value) == field.enum_field.?.value) {
+                        return to_input_list(field.field_type.Inputs)[0..];
+                    }
                 }
-            }
 
-            unreachable;
+                unreachable;
+            }
         }
 
         fn outputinfo_to_valueinfo(comptime info: OutputInfo) ValueInfo {
             return ValueInfo{
                 .name = info.name,
-                .kind = union_variant_for(Value, info.output_type),
+                .kind = union_variant_for(Value, info.output_type).tag,
             };
         }
 
@@ -206,12 +210,30 @@ pub fn ComponentUnion(comptime T: type) type {
             unreachable;
         }
 
-        pub fn get_output(this: *Self, index: usize, inputs: T.Inputs, props: T.Properties) ?Value {
-            @compileError("Test");
+        pub fn get_output(this: *Self, index: usize, inputs_: Inputs, props: Properties) ?Value {
             inline for (@typeInfo(T).Union.fields) |field| {
                 if (@enumToInt(this.value) == field.enum_field.?.value) {
-                    return @field(this.value, field.name).get_output(index, from_union(field.field_type.Inputs, inputs), from_union(field.field_type.Properties, props), Value, to_value);
+                    return @field(this.value, field.name).get_output(index, from_union(field.field_type.Inputs, inputs_), from_union(field.field_type.Properties, props), Value, to_value);
                 }
+            }
+        }
+
+        pub fn make_input(this: *const Self, fields: []const Value) Inputs {
+            comptime {
+                inline for (@typeInfo(T).Union.fields) |field| {
+                    if (@enumToInt(this.value) == field.enum_field.?.value) {
+                        const i_type = @typeOf(@field(this.value, field.name));
+                        var out: i_type.Inputs = undefined;
+
+                        inline for (@typeInfo(i_type).fields) |field, i| {
+                            @field(out, field.field_name) = from_union(field.field_type, fields[i]);
+                        }
+
+                        return out;
+                    }
+                }
+
+                unreachable;
             }
         }
 

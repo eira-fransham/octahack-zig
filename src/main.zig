@@ -189,7 +189,7 @@ const OctahackComponent = ComponentUnion(union(enum) {
     pub const Inputs = union(enum) {
         Something: SomethingComponent.Inputs,
     };
-    pub const Properties = union(enum) {
+    pub const Properties = union {
         Something: SomethingComponent.Properties,
     };
 });
@@ -209,10 +209,10 @@ fn make_null(comptime T: type) T {
     return out;
 }
 
-fn Rack(comptime num_components: comptime_int, comptime InnerComponent: type) type {
-    const Out = struct {
+fn Rack(comptime num_components: comptime_int, comptime Inputs: type, comptime Outputs: type, comptime InnerComponent: type) type {
+    return struct {
         const Self = @This();
-        const Wire = union(enum) {
+        const WireInternal = union(enum) {
             Component: struct {
                 tag: usize,
                 index: usize,
@@ -220,24 +220,24 @@ fn Rack(comptime num_components: comptime_int, comptime InnerComponent: type) ty
             },
             Self: usize,
         };
-        const WireArray = [InnerComponent.MAX_INPUT_COUNT]?Wire;
+        const WireArray = [InnerComponent.MAX_INPUT_COUNT]?WireInternal;
         const TaggedComponent = struct {
             tag: usize,
             value: InnerComponent,
             wiring: WireArray,
         };
 
-        pub const Inputs = struct {
-            audio: Audio,
-            midi: Midi,
+        pub const WireEnd = union(enum) {
+            Component: struct {
+                index: usize,
+                // input ID for input wire end, output ID for output wire end
+                id: usize,
+            },
+            Self: usize,
         };
-        pub const Properties = struct {};
-        const OutputWires = struct {
-            audio: ?Wire,
-            midi: ?Wire,
-        };
+
         components: [num_components]?TaggedComponent,
-        outputs: OutputWires,
+        output_wires: [@memberCount(Outputs)]?WireInternal,
         current_tag: usize,
 
         fn next_id(this: *Self) usize {
@@ -246,33 +246,74 @@ fn Rack(comptime num_components: comptime_int, comptime InnerComponent: type) ty
             return out;
         }
 
+        fn get_input(this: *Self, index: usize, inputs: *const Inputs, properties: *const [num_components]?InnerComponent.Properties) InnerComponent.Inputs {
+            var input_array: [InnerComponent.MAX_INPUT_COUNT]InnerComponent.Value = undefined;
+            const comp = this.components[index] orelse @panic("unimplemented");
+            const inputs_ = comp.value.inputs();
+            for (inputs_) |input, i| {
+                input_array[i] = this.get_component_output(comp.wiring[i] orelse @panic("unimplemented"), inputs, properties) orelse @panic("unimplemented");
+            }
+
+            return comp.value.make_input(input_array[0..inputs_.len]);
+        }
+
+        fn get_component_output(this: *Self, read_wire: WireInternal, inputs: *const Inputs, properties: *const [num_components]?InnerComponent.Properties) ?InnerComponent.Value {
+            switch (read_wire) {
+                WireInternal.Component => |c| {
+                    const comp = if (this.components[c.index]) |*i| i else return null;
+                    if (comp.tag != c.tag) return null;
+
+                    // TODO: Lazily generate inputs, since we don't necessarily need every input
+                    //       for every output
+                    // TODO: Cache outputs to allow circular wiring
+                    return comp.value.get_output(c.output_id, this.get_input(c.index, inputs, properties), properties[c.index].?);
+                },
+                WireInternal.Self => |input_id| {
+                    inline for (@typeInfo(Inputs).Struct.fields) |field, i| {
+                        if (i == input_id) return helpers.to_union(InnerComponent.Value, @field(inputs, field.name));
+                    }
+                },
+            }
+
+            @panic("unimplemented");
+        }
+
         pub fn new() Self {
             return @This(){
                 .components = make_null([num_components]?TaggedComponent),
-                .outputs = OutputWires{ .audio = null, .midi = null },
+                .output_wires = make_null([@memberCount(Outputs)]?WireInternal),
                 .current_tag = 0,
             };
         }
 
-        fn get_output(this: *Self, wire: Wire, inputs: Inputs, properties: Properties) ?InnerComponent.Value {
+        pub fn wire(input: WireEnd, output: WireEnd) void {
             @panic("unimplemented");
         }
 
-        fn get_audio(this: *Self, inputs: Inputs, properties: Properties) ?Audio {
-            if (this.outputs.audio) |audio| {
-                const maybe_out_val = this.get_output(audio, inputs, properties);
-                if (maybe_out_val) |out_val| {
-                    return helpers.try_from_union(Audio, out_val);
-                } else {
-                    return null;
+        pub fn outputs(this: *Self, inputs: Inputs, properties: [num_components]?InnerComponent.Properties) Outputs {
+            const internal = struct {
+                fn or_child(comptime T: type) type {
+                    return if (@typeId(T) == TypeId.Optional) T.Child else T;
                 }
-            } else {
-                return null;
-            }
-        }
+            };
 
-        fn get_midi(self: *Self, inputs: Inputs, properties: Properties) ?Midi {
-            @panic("unimplemented");
+            var out: Outputs = undefined;
+            inline for (@typeInfo(Outputs).Struct.fields) |field, i| {
+                if (this.output_wires[i]) |out_wire| {
+                    const maybe_out_val = this.get_component_output(out_wire, &inputs, &properties);
+                    if (maybe_out_val) |out_val| {
+                        @field(out, field.name) = helpers.from_union(internal.or_child(field.field_type), out_val);
+                        continue;
+                    }
+                }
+
+                if (@typeId(field.field_type) == TypeId.Optional) {
+                    @field(out, field.name) = null;
+                } else {
+                    @panic("Unimplemented");
+                }
+            }
+            return out;
         }
 
         pub fn new_component(this: *Self, index: usize, tag: InnerComponent.ComponentKind) void {
@@ -292,8 +333,6 @@ fn Rack(comptime num_components: comptime_int, comptime InnerComponent: type) ty
             };
         }
     };
-
-    return Component(Out).output("audio", Out.get_audio).output("midi", Out.get_midi);
 }
 
 test "Component" {
@@ -321,5 +360,16 @@ test "ComponentUnion" {
 }
 
 test "Rack" {
-    const MyRack = Rack(8, OctahackComponent);
+    comptime {
+        const Inputs = struct {
+            audio: Audio,
+            midi: Midi,
+        };
+        const Outputs = struct {
+            audio: Audio,
+            midi: Midi,
+        };
+        const MyRack = Rack(8, Inputs, Outputs, OctahackComponent);
+        const outputs = MyRack.new().outputs(Inputs{ .audio = Audio{}, .midi = Midi{} }, make_null([8]?OctahackComponent.Properties));
+    }
 }

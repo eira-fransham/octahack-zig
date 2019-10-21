@@ -37,16 +37,19 @@ pub fn UnionVariant(comptime TagType: type) type {
     };
 }
 
-pub fn union_variant_for(comptime Union: type, comptime Ty: type) @TagType(Union) {
+pub fn union_variant_for(comptime Union: type, comptime Ty: type) UnionVariant(@TagType(Union)) {
     comptime {
-        var out: ?@TagType(Union) = null;
+        var out: ?UnionVariant(@TagType(Union)) = null;
 
         inline for (@typeInfo(Union).Union.fields) |field| {
             if (field.field_type == Ty) {
                 if (out != null) {
                     @compileError("Union " ++ @typeName(Union) ++ " contains type " ++ @typeName(Ty) ++ " more than once (second field: " ++ field.name ++ ")");
                 }
-                out = @intToEnum(@TagType(Union), field.enum_field.?.value);
+                out = UnionVariant(@TagType(Union)){
+                    .name = field.name,
+                    .tag = @intToEnum(@TagType(Union), field.enum_field.?.value),
+                };
             }
         }
 
@@ -58,26 +61,6 @@ pub fn union_variant_for(comptime Union: type, comptime Ty: type) @TagType(Union
     }
 }
 
-pub fn union_field_for(comptime Union: type, comptime Ty: type) []const u8 {
-    comptime {
-        var out: ?[]const u8 = null;
-
-        inline for (@typeInfo(Union).Union.fields) |field| {
-            if (field.field_type == Ty) {
-                if (out != null) {
-                    @compileError("Union " ++ @typeName(Union) ++ " contains type " ++ @typeName(Ty) ++ " more than once (second field: " ++ field.name ++ ")");
-                }
-                out = field.name;
-            }
-        }
-
-        if (out) |tag| {
-            return tag;
-        } else {
-            @compileError("Union " ++ @typeName(Union) ++ " doesn't contain type " ++ @typeName(Ty));
-        }
-    }
-}
 pub fn to_union(comptime Union: type, value: var) Union {
     return @unionInit(Union, union_variant_for(Union, @typeOf(value)).name, value);
 }
@@ -87,11 +70,10 @@ pub fn from_union(comptime Type: type, union_: var) Type {
 }
 
 pub fn try_from_union(comptime Type: type, union_: var) ?Type {
-    const itag = comptime union_variant_for(@typeOf(union_), Type);
-    const vname = comptime union_field_for(@typeOf(union_), Type);
+    const variant = comptime union_variant_for(@typeOf(union_), Type);
 
-    if (@enumToInt(union_) == @enumToInt(itag)) {
-        return @field(union_, vname);
+    if (@enumToInt(union_) == @enumToInt(variant.tag)) {
+        return @field(union_, variant.name);
     } else {
         return null;
     }
