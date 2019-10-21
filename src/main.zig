@@ -209,7 +209,7 @@ fn make_null(comptime T: type) T {
     return out;
 }
 
-fn Track(comptime num_components: comptime_int, comptime InnerComponent: type) type {
+fn Rack(comptime num_components: comptime_int, comptime InnerComponent: type) type {
     const Out = struct {
         const Self = @This();
         const Wire = union(enum) {
@@ -320,6 +320,6 @@ test "ComponentUnion" {
     }
 }
 
-test "Track" {
-    const MyTrack = Track(8, OctahackComponent);
+test "Rack" {
+    const MyRack = Rack(8, OctahackComponent);
 }

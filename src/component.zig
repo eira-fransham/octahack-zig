@@ -160,7 +160,7 @@ pub fn ComponentUnion(comptime T: type) type {
             var out: [@typeInfo(Variant).Struct.fields.len]ValueInfo = undefined;
 
             inline for (@typeInfo(Variant).Struct.fields) |field, i| {
-                out[i] = ValueInfo{ .name = field.name, .kind = union_variant_for(Value, field.field_type).tag };
+                out[i] = ValueInfo{ .name = field.name, .kind = union_variant_for(Value, field.field_type) };
             }
 
             return out;
@@ -192,7 +192,7 @@ pub fn ComponentUnion(comptime T: type) type {
         fn outputinfo_to_valueinfo(comptime info: OutputInfo) ValueInfo {
             return ValueInfo{
                 .name = info.name,
-                .kind = union_variant_for(Value, info.output_type).tag,
+                .kind = union_variant_for(Value, info.output_type),
             };
         }
 
@@ -207,6 +207,7 @@ pub fn ComponentUnion(comptime T: type) type {
         }
 
         pub fn get_output(this: *Self, index: usize, inputs: T.Inputs, props: T.Properties) ?Value {
+            @compileError("Test");
             inline for (@typeInfo(T).Union.fields) |field| {
                 if (@enumToInt(this.value) == field.enum_field.?.value) {
                     return @field(this.value, field.name).get_output(index, from_union(field.field_type.Inputs, inputs), from_union(field.field_type.Properties, props), Value, to_value);
